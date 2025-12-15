@@ -65,7 +65,7 @@ gen-external-apklibs
 *.sig
 
 pkg/
-src/
+# src/  # Commented out - we need src/ for Rust code
 
 ### Git ###
 # Created by git for backups. To disable backups in Git:
