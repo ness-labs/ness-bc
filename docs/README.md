@@ -1,96 +1,176 @@
-# ness-bc Documentation
+# ness-bc - Blockchain Integration
 
-Rust blockchain integration — Solana, Privy, x402.
+Solana, Privy, and x402 integration for the Ness payment platform.
 
-## Tech Stack
+## Overview
 
-- Rust 2024 edition
-- solana-sdk / solana-client
-- Privy Rust SDK (server-side wallet operations)
-- x402 protocol implementation
+Provides:
+- Privy API client for wallet management
+- Solana RPC client for balance/transaction queries
+- x402 payment protocol handler
 
-## Setup
+## Modules
 
-```bash
-cd ness-bc
-cp .env.template .env
-# Edit .env with your values
-cargo run
+### Privy Client
+
+Manages user wallets via Privy's server-side API:
+
+```rust
+use ness_bc::privy::PrivyClient;
+
+let privy = PrivyClient::from_env()?;
+
+// Get user info
+let user = privy.get_user("did:privy:123").await?;
+
+// Create Solana wallet for user
+let wallet = privy.create_wallet("did:privy:123").await?;
+
+// Get user's wallets
+let wallets = privy.get_wallets("did:privy:123").await?;
+
+// Sign transaction (server-side)
+let signature = privy.sign_transaction(
+    "wallet_id",
+    "base64_encoded_transaction"
+).await?;
 ```
 
-## Environment Variables
+### Solana Client
 
-```bash
-PRIVY_APP_ID=your_app_id
-PRIVY_APP_SECRET=your_app_secret
-SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-RUST_LOG=info
+Interacts with Solana blockchain:
+
+```rust
+use ness_bc::solana::SolanaClient;
+
+let solana = SolanaClient::from_env()?;
+
+// Get wallet balance
+let balance = solana.get_balance("wallet_address")?;
+println!("{} SOL", balance.sol);
+
+// Confirm transaction
+let result = solana.confirm_transaction("signature")?;
+if result.confirmed {
+    println!("Transaction confirmed at slot {}", result.slot);
+}
+
+// Check sufficient balance
+solana.check_balance("address", 50_000_000)?; // 0.05 SOL
+```
+
+### x402 Handler
+
+Implements the x402 payment protocol:
+
+```rust
+use ness_bc::x402::{X402Handler, ServicePricing};
+
+let x402 = X402Handler::from_env()?;
+
+// Create payment required response
+let pricing = ServicePricing::video_generation();
+let payment_info = x402.create_payment_required(&pricing);
+
+// Returns:
+// {
+//   "payment_address": "...",
+//   "amount_lamports": 50000000,
+//   "amount_sol": 0.05,
+//   "currency": "SOL",
+//   "description": "Generate an 8-second video using Gemini Veo3",
+//   "resource_id": "veo3-video-8s:uuid",
+//   "expires_at": 1734267600
+// }
+
+// Verify payment proof
+let verification = x402.verify_payment(&proof)?;
+if verification.valid {
+    // Grant access to resource
+}
 ```
 
 ## x402 Protocol Flow
 
 ```
 1. Client requests resource
-2. Server returns HTTP 402 + payment details
-3. Client signs Solana transaction (via Privy wallet)
-4. Client retries with X-Payment header
-5. Server verifies payment, returns resource
+   GET /api/video/generate
+
+2. Server returns 402 Payment Required
+   {
+     "payment_address": "...",
+     "amount_sol": 0.05,
+     "resource_id": "veo3:abc123"
+   }
+
+3. Client signs Solana transaction via Privy
+   (triggers biometric MFA on device)
+
+4. Client retries with payment proof
+   GET /api/video/generate
+   X-Payment-Proof: {"transaction_signature": "...", ...}
+
+5. Server verifies payment on Solana
+   - Confirms transaction
+   - Validates amount and recipient
+   - Checks idempotency
+
+6. Server returns resource
+   200 OK with video data
 ```
 
-### 402 Response
+## Service Pricing
 
-```json
-{
-  "error": {
-    "code": "PAYMENT_REQUIRED",
-    "message": "Payment required to access resource"
-  },
-  "payment": {
-    "amount": 0.001,
-    "currency": "SOL",
-    "recipient": "recipient_wallet_address",
-    "memo": "resource_id"
-  }
-}
-```
+Pre-configured services:
 
-### Payment Header
+| Service ID | Price | Description |
+|------------|-------|-------------|
+| `veo3-video-8s` | 0.05 SOL | 8-second AI video generation |
 
-```
-X-Payment: <base64_encoded_signed_transaction>
-```
-
-## Privy Server-Side Operations
-
-### Create Wallet for User
+Add custom pricing:
 
 ```rust
-// POST https://api.privy.io/v1/wallets
-// owner: { type: "user", id: "privy_user_did" }
-// chain_type: "solana"
-```
-
-### Sign Transaction (Server Wallet)
-
-```rust
-// For server-owned wallets only
-// User wallets sign via iOS app with biometric MFA
+let custom = ServicePricing {
+    service_id: "custom-service".into(),
+    name: "Custom Service".into(),
+    price_lamports: 10_000_000, // 0.01 SOL
+    description: "Description".into(),
+};
 ```
 
 ## Project Structure
 
 ```
 src/
-├── main.rs          # Entry point
 ├── lib.rs           # Library exports
-├── privy/           # Privy API client
-├── solana/          # Solana operations
-└── x402/            # x402 protocol
+├── main.rs          # CLI for testing
+├── error.rs         # Error types
+├── privy/
+│   ├── mod.rs
+│   ├── client.rs    # Privy API client
+│   └── types.rs     # Privy data types
+├── solana/
+│   ├── mod.rs
+│   ├── client.rs    # Solana RPC client
+│   └── types.rs     # Solana data types
+└── x402/
+    ├── mod.rs
+    ├── handler.rs   # x402 payment handler
+    └── types.rs     # x402 data types
 ```
 
-## Docs
+## Environment Variables
 
-- [Solana Rust SDK](https://solana.com/docs/clients/official/rust)
-- [Privy Rust](https://docs.privy.io/basics/rust/quickstart)
-- [x402 Protocol](https://solana.com/x402/what-is-x402)
-- [Privy Create Wallet](https://docs.privy.io/wallets/wallets/create/create-a-wallet)
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PRIVY_APP_ID` | Yes | Privy application ID |
+| `PRIVY_APP_SECRET` | Yes | Privy application secret |
+| `SOLANA_RPC_URL` | No | Solana RPC (default: devnet) |
+| `NESS_PAYMENT_ADDRESS` | Yes | Wallet for receiving payments |
+
+## Security Notes
+
+- Never log or store private keys
+- Privy handles all key custody
+- All wallet operations require user MFA
+- Verify transactions on-chain before granting access
